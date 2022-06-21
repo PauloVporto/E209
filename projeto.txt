@@ -1,0 +1,145 @@
+#include <Arduino.h>
+#include <stdio.h>
+#include <stdlib.h>
+#define FOSC 16000000U 
+#define BAUD 9600
+#define MYUBRR FOSC / 16 / BAUD - 1
+
+int ts = 0;// tempo do sistema
+int tl = 0;//tempo led
+int tb = 0;//tempo botao
+bool sist = false;//sistema
+bool motor = false;// controle do motor// protótipos das funções
+char msg_tx[20];
+char msg_rx[32];
+int pos_msg_rx = 0;
+int tamanho_msg_rx = 1;
+unsigned int valor = 0;
+
+
+void UART_Init(unsigned int ubrr);// recepção de mensagens
+void UART_Transmit(char *dados);
+
+
+
+ISR(INT0_vect)// parte da interrupcao int0
+{
+  UART_Transmit("Sistema Desligado");// informa a interrupção | sistema foi desligado
+  ts = 0;
+  tl = 0;
+  tb = 0;
+  sisten = false;
+  motor = false;
+  PORTB &= ~(1 << PB0);
+  OCR0A = 0;
+}
+
+ISR(TIMER2_OVF_vect)//parte do timer 2 
+{
+  // caso do botão pressionado por até 5 segundos
+  if (sist == false)
+  {
+    if (!(PIND & (1 << PD4)))// acendendo o led até atingir os 5 segundos
+    {
+      if (tb == 306)
+       sist = true;
+        PORTB |= 1 << PB0;// ligando o led do motor
+        UART_Transmit("Sistema Ligado");// mostrando que o sistema foi ligado
+    }
+      }
+      else
+      {
+        tb++;
+      }
+    }
+    else
+    {
+      tb = 0;
+    }
+  }
+  else
+  {
+    ts++;
+    tl++;
+    if (tl == 245 && motor == false)
+    {PORTB &= ~(1 << PB0);
+      motor = true;
+      ts = 0;
+    } if (ts <= 1526 && motor)
+    {
+      ADCSRA |= (1 << ADSC);// inicializando a conversão
+      while (ADCSRA == (ADCSRA | (1 << ADSC)))
+        OCR0A = ADC * (255.0 / 1023.0);}
+    else if (motor)
+    {
+      OCR0A = 128;
+    }
+  }
+}
+
+
+
+int main()
+{
+  DDRB = (1 << PB0);// configura PB0 como entrada
+  DDRD = 1 << PD6;// configuradoi como saida
+  PORTD = (1 << PD2) | (1 << PD4); // habilita pull up dos botões PD2 e PD4
+  TCCR2B = (1 << CS22) | (1 << CS21) | (1 << CS20);
+  TIMSK2 = (1 << TOIE2);// ativando a interrupção por overflow
+  TCCR0A = (1 << COM0A1) | (1 << WGM00);// configura modo FAST PWM e modo do comparador A
+  TCCR0B = (1 << CS00);// seleciona opção para frequência
+  TCNT0 = 0;
+  OCR0A = 0;
+  ADMUX = (1 << REFS0);
+  ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0); // ADEN - liga o ADC | ADPSX - configura prescaler (111 == 128)
+ 
+  EICRA = (1 << ISC01);// habilita interrupção em PD2 por transição de descida
+  EIMSK = (1 << INT0);// habilita a interrupção global 0
+  sei();// habilita interrupção global
+
+  UART_Init(MYUBRR);// inicializa a comunicação serial
+
+  while (1)
+  {
+    if (msg_rx[0] == 'P' || msg_rx[0] == 'p')// ao digitar 'P', mostrará a velocidade de rotação atual do motor
+    {
+      int vr = OCR0A;// vr = velocidade de rotação
+      char v_OCR[8];//valor ocr
+      itoa(vr,v_OCR,10);// inicia o processo de exibição da variável vr
+      UART_Transmit(v_OCR);
+      UART_Transmit("\n");
+      
+    }
+  }
+}
+ISR(USART_RX_vect)
+{
+	// Escreve o valor recebido pela UART na posição pos_msg_rx do buffer msg_rx
+	msg_rx[pos_msg_rx++] = UDR0;
+	if (pos_msg_rx == tamanho_msg_rx)
+		pos_msg_rx = 0;
+        
+}
+void UART_Init(unsigned int ubrr)
+{
+	// Configura a baud rate */6
+	UBRR0H = (unsigned char)(ubrr >> 8);
+	UBRR0L = (unsigned char)ubrr;
+	// Habilita a recepcao, tranmissao e interrupcao na recepcao */
+	UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0);
+	// Configura o formato da mensagem: 8 bits de dados e 1 bits de stop */
+	UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
+}
+
+void UART_Transmit(char * dados)
+{
+	// Envia todos os caracteres do buffer dados ate chegar um final de linha
+	while (*dados != 0)
+	{
+		while (!(UCSR0A & (1 << UDRE0))); // Aguarda a transmissão acabar
+		// Escreve o caractere no registro de tranmissão
+		UDR0 = *dados;
+		// Passa para o próximo caractere do buffer dados
+		dados++;
+	}
+}
